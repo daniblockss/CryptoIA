@@ -1,13 +1,13 @@
-"""CryptoIA supervisor: elect one active server through a Firebase RTDB lease.
+"""CryptoIA single-active-server supervisor.
 
-Never commit the Firebase service-account JSON. Set
-GOOGLE_APPLICATION_CREDENTIALS to a file stored outside this repository.
+All server credentials stay outside the repository. The lease is acquired and
+renewed with Firebase RTDB transactions. The generation token fences stale
+processes from writing after a lease has moved to another server.
 """
 from __future__ import annotations
 
 import logging
 import os
-import signal
 import subprocess
 import sys
 import time
@@ -20,140 +20,127 @@ from firebase_admin import credentials, db
 
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
-
 DATABASE_URL = os.getenv("FIREBASE_DATABASE_URL", "").strip()
 CREDENTIALS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
 SERVER_ID = os.getenv("SERVER_ID", "").strip()
-LEASE_TTL = max(20, int(os.getenv("LEASE_TTL_SECONDS", "45")))
-HEARTBEAT_INTERVAL = max(5, int(os.getenv("HEARTBEAT_INTERVAL_SECONDS", "10")))
-RESTART_DELAY = max(1, int(os.getenv("AGENT_RESTART_DELAY_SECONDS", "5")))
-LEASE_PATH = "/coordination/active_lease"
+LEASE_TTL = max(30, int(os.getenv("LEASE_TTL_SECONDS", "60")))
+HEARTBEAT = max(5, int(os.getenv("HEARTBEAT_INTERVAL_SECONDS", "10")))
+RESTART_DELAY = 5
+LEASE_PATH = "/cryptoia/control/lease"
 
-logging.basicConfig(
-    level=os.getenv("LOG_LEVEL", "INFO"),
-    format="%(asctime)s %(levelname)s %(message)s",
-)
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"),
+                    format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("cryptoia.supervisor")
 
 
-def initialize_firebase() -> None:
+def initialize() -> None:
     if not DATABASE_URL:
-        raise RuntimeError("FIREBASE_DATABASE_URL não foi configurada.")
+        raise RuntimeError("FIREBASE_DATABASE_URL ausente.")
     if not CREDENTIALS_PATH or not Path(CREDENTIALS_PATH).is_file():
-        raise RuntimeError(
-            "Defina GOOGLE_APPLICATION_CREDENTIALS apontando para o JSON "
-            "da conta de serviço, guardado fora do repositório."
-        )
-    if not SERVER_ID or SERVER_ID == "change-this-to-a-unique-server-id":
-        raise RuntimeError("Defina um SERVER_ID único para este servidor.")
-
+        raise RuntimeError("Configure GOOGLE_APPLICATION_CREDENTIALS com o JSON de serviço fora do GitHub.")
+    if not SERVER_ID or SERVER_ID.startswith("change-this"):
+        raise RuntimeError("Configure um SERVER_ID único em cada máquina.")
     if not firebase_admin._apps:
-        cred = credentials.Certificate(CREDENTIALS_PATH)
-        firebase_admin.initialize_app(cred, {"databaseURL": DATABASE_URL})
+        firebase_admin.initialize_app(
+            credentials.Certificate(CREDENTIALS_PATH),
+            {"databaseURL": DATABASE_URL},
+        )
 
 
-def acquire_lease() -> bool:
-    """Atomic RTDB transaction: only one server can acquire an unexpired lease."""
+def acquire() -> dict[str, Any] | None:
     ref = db.reference(LEASE_PATH)
     now = int(time.time())
 
-    def claim(current: Any) -> Any:
-        if current and current.get("owner") != SERVER_ID:
-            if int(current.get("expires_at", 0)) > now:
-                return current
-        generation = int((current or {}).get("generation", 0)) + 1
+    def txn(current: Any) -> Any:
+        current = current or {}
+        if current.get("owner") not in (None, "", SERVER_ID) and int(current.get("expires_at", 0)) > now:
+            return current
         return {
             "owner": SERVER_ID,
             "heartbeat_at": now,
             "expires_at": now + LEASE_TTL,
-            "generation": generation,
+            "generation": int(current.get("generation", 0)) + 1,
         }
 
-    result = ref.transaction(claim)
-    return bool(result and result.get("owner") == SERVER_ID)
+    result = ref.transaction(txn)
+    if result and result.get("owner") == SERVER_ID and int(result.get("expires_at", 0)) > now:
+        return result
+    return None
 
 
-def renew_lease() -> bool:
-    """Renew only if this server still owns the lease; never overwrite a new owner."""
+def renew(generation: int) -> bool:
     ref = db.reference(LEASE_PATH)
     now = int(time.time())
 
-    def renew(current: Any) -> Any:
-        if not current or current.get("owner") != SERVER_ID:
+    def txn(current: Any) -> Any:
+        if not current or current.get("owner") != SERVER_ID or int(current.get("generation", -1)) != generation:
             return current
         updated = dict(current)
-        updated["heartbeat_at"] = now
-        updated["expires_at"] = now + LEASE_TTL
+        updated.update(heartbeat_at=now, expires_at=now + LEASE_TTL)
         return updated
 
-    result = ref.transaction(renew)
-    return bool(result and result.get("owner") == SERVER_ID)
+    result = ref.transaction(txn)
+    return bool(result and result.get("owner") == SERVER_ID
+                and int(result.get("generation", -1)) == generation
+                and int(result.get("expires_at", 0)) > now)
 
 
-def release_lease() -> None:
+def release(generation: int) -> None:
     ref = db.reference(LEASE_PATH)
 
-    def release(current: Any) -> Any:
-        if not current or current.get("owner") != SERVER_ID:
+    def txn(current: Any) -> Any:
+        if not current or current.get("owner") != SERVER_ID or int(current.get("generation", -1)) != generation:
             return current
-        return {
-            "owner": None,
-            "heartbeat_at": int(time.time()),
-            "expires_at": 0,
-            "generation": int(current.get("generation", 0)),
-        }
-
-    ref.transaction(release)
+        return {"owner": None, "heartbeat_at": int(time.time()), "expires_at": 0,
+                "generation": generation}
+    ref.transaction(txn)
 
 
-def run_agent() -> int:
-    command = [sys.executable, str(ROOT / "main.py")]
-    log.info("Iniciando agente CryptoIA: %s", SERVER_ID)
-    process = subprocess.Popen(command, cwd=ROOT)
+def run_agent(generation: int) -> int:
+    env = os.environ.copy()
+    env["CRYPTOIA_LEASE_GENERATION"] = str(generation)
+    env["CRYPTOIA_SERVER_ID"] = SERVER_ID
+    proc = subprocess.Popen([sys.executable, str(ROOT / "main.py")], cwd=ROOT, env=env)
     try:
-        while process.poll() is None:
-            time.sleep(HEARTBEAT_INTERVAL)
-            if not renew_lease():
-                log.warning("Lease perdido; encerrando o agente por segurança.")
-                process.terminate()
+        while proc.poll() is None:
+            time.sleep(HEARTBEAT)
+            if not renew(generation):
+                log.error("Lease perdido; encerrando agente para evitar execução dupla.")
+                proc.terminate()
                 try:
-                    process.wait(timeout=10)
+                    proc.wait(timeout=8)
                 except subprocess.TimeoutExpired:
-                    process.kill()
+                    proc.kill()
                 return 2
-        return int(process.returncode or 0)
+        return int(proc.returncode or 0)
     finally:
-        if process.poll() is None:
-            process.terminate()
+        if proc.poll() is None:
+            proc.terminate()
 
 
 def main() -> None:
-    initialize_firebase()
-    log.info("Servidor %s aguardando lease exclusivo.", SERVER_ID)
-
+    initialize()
+    log.info("Servidor %s em espera pela eleição.", SERVER_ID)
     while True:
         try:
-            if not acquire_lease():
-                log.info("Outro servidor já está ativo. Este ficará em espera.")
-                time.sleep(HEARTBEAT_INTERVAL)
+            lease = acquire()
+            if not lease:
+                log.info("Outro servidor possui o lease ativo.")
+                time.sleep(HEARTBEAT)
                 continue
-
-            log.info("Lease adquirido; este é o único agente ativo.")
-            code = run_agent()
-            log.info("Agente finalizado com código %s.", code)
-            release_lease()
+            generation = int(lease["generation"])
+            log.info("Lease adquirido. Geração %s.", generation)
+            try:
+                run_agent(generation)
+            finally:
+                release(generation)
             time.sleep(RESTART_DELAY)
         except KeyboardInterrupt:
-            log.info("Encerramento solicitado.")
+            log.info("Encerrando supervisor.")
             break
         except Exception:
-            log.exception("Falha no supervisor; tentando novamente.")
+            log.exception("Erro no supervisor; nova tentativa em alguns segundos.")
             time.sleep(RESTART_DELAY)
-
-    try:
-        release_lease()
-    except Exception:
-        log.exception("Não foi possível liberar o lease durante o encerramento.")
 
 
 if __name__ == "__main__":
