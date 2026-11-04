@@ -103,7 +103,14 @@ def coinmarketcap_quotes(symbols: list[str]) -> dict[str, dict[str, Any]]:
         if not symbol:
             continue
         quote = coin.get("quote", {})
-        brl = quote.get("BRL", {}) if isinstance(quote, dict) else {}
+        brl = {}
+        if isinstance(quote, dict):
+            brl = quote.get("BRL", quote)
+        elif isinstance(quote, list):
+            for item in quote:
+                if isinstance(item, dict) and str(item.get("symbol", "")).upper() == "BRL":
+                    brl = item
+                    break
         price = _number(brl.get("price")) if isinstance(brl, dict) else None
         change = _change(brl.get("percent_change_24h")) if isinstance(brl, dict) else None
 
