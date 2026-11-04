@@ -1,48 +1,93 @@
 # CryptoIA
 
-Agente educacional de análise de mercado cripto, com painel, memória, alertas e
-carteira **simulada**. O projeto não executa ordens reais, saques ou pagamentos PIX.
+Agente educacional de análise de mercado cripto com dados somente leitura, IA LLM7, memória, lembretes, painel web e carteira 100% simulada. O programa não envia ordens à corretora, não saca e não transfere dinheiro.
 
-## Arquitetura inicial
+## O que está incluído
 
-- `start.py`: supervisor e eleição de servidor ativo via transação atômica no Firebase RTDB.
-- `main.py`: processo do agente (inicialmente em modo simulado).
-- Firebase RTDB: coordenação e, nas próximas etapas, estado compartilhado.
-- LLM7: será o único provedor de IA; chamadas serão limitadas por orçamento, cache e eventos.
-- Brasil Bitcoin e CoinMarketCap: fontes de dados de mercado em modo somente leitura, após validar os endpoints oficiais.
-- `painel.html`: painel web será adicionado em uma etapa separada.
+- start.py: eleição atômica por lease no Firebase RTDB; mantém apenas um agente ativo.
+- Fencing por geração: processos antigos perdem permissão de gravar após perder o lease.
+- app/market.py: ticker público da Brasil Bitcoin e cotações CoinMarketCap.
+- app/llm7.py: único provedor de IA, com limite diário e intervalo mínimo entre chamadas.
+- app/portfolio.py: carteira virtual, posições, histórico, resultado e despesas fictícias.
+- app/reminders.py: alertas por preço ou variação percentual e leitura da memória associada.
+- app/memory.py: memórias em arquivos Markdown locais e índice no Firebase.
+- painel.html: painel web com autenticação, cotações, carteira virtual, lembretes, memórias e status.
+- firebase.rules.json: regras de segurança com UID autorizado.
 
-## Um agente ativo por vez
+## 1. Preparar Firebase
 
-Vários servidores podem executar `start.py`, mas a transação em
-`/coordination/active_lease` permite que apenas um adquira o lease válido.
-O agente renova o lease periodicamente. Se perder a posse, o supervisor encerra
-o processo para evitar dois agentes ativos.
+1. No Firebase Console do projeto cryptoai-160f4, habilite Authentication > Sign-in method > Email/Password.
+2. Crie manualmente um usuário em Authentication > Users. Não existe cadastro público pelo painel.
+3. Copie o UID desse usuário.
+4. Em Realtime Database > Rules, publique as regras de firebase.rules.json, substituindo REPLACE_WITH_YOUR_FIREBASE_AUTH_UID pelo UID copiado.
+5. Em Project settings > Service accounts, gere uma chave JSON para o servidor. Guarde-a fora da pasta do projeto e nunca a envie ao GitHub.
 
-## Instalação
+As regras permitem leitura apenas ao UID autorizado. O navegador só pode criar comandos de simulação e lembretes; não pode editar carteira, mercado, memórias ou estado do servidor. O SDK Admin do servidor ignora as regras do cliente, por isso proteja muito bem o JSON.
 
-Requer Python 3.10 ou superior.
+## 2. Preparar servidor Python
 
-1. Clone o repositório e entre na pasta.
-2. Crie um ambiente virtual: `python -m venv .venv`.
-3. Ative o ambiente virtual e instale: `pip install -r requirements.txt`.
-4. Copie `.env.example` para `.env` e configure os valores.
-5. Crie uma conta de serviço no Firebase e guarde o JSON fora desta pasta.
-6. Aponte `GOOGLE_APPLICATION_CREDENTIALS` para esse JSON e configure as regras/permissões do RTDB.
-7. Execute `python start.py`.
+Requer Python 3.10+.
 
-**Nunca** envie o JSON da conta de serviço, arquivos `.env`, chaves de API ou senhas
-para o GitHub. O endereço do banco e a configuração web do Firebase não substituem
-autenticação nem regras de segurança.
+```bash
+git clone https://github.com/daniblockss/CryptoIA.git
+cd CryptoIA
+python -m venv .venv
+# Linux:
+source .venv/bin/activate
+# Windows PowerShell:
+# .venv\\Scripts\\Activate.ps1
+pip install -r requirements.txt
+cp .env.example .env
+```
 
-## Próximas etapas
+Edite .env:
+- FIREBASE_DATABASE_URL: já está preenchido com o banco deste projeto.
+- GOOGLE_APPLICATION_CREDENTIALS: caminho absoluto do JSON de serviço, fora do repositório.
+- SERVER_ID: identificador diferente em cada máquina (ex.: pi-casa-01).
+- LLM7_API_KEY: token LLM7 do servidor; não coloque no HTML nem no GitHub.
+- CMC_API_KEY: opcional; a integração também tenta a API pública keyless.
+- Ajuste MARKET_ASSETS, INITIAL_SIMULATED_BRL e os limites de chamadas se desejar.
 
-1. Validar regras e autenticação do Firebase.
-2. Implementar dados de mercado somente leitura (Brasil Bitcoin e CoinMarketCap).
-3. Implementar carteira simulada, histórico e contabilização de taxas hipotéticas.
-4. Adicionar memória e lembretes acionados por condições de mercado.
-5. Integrar LLM7 com limite rígido de chamadas e custo.
-6. Criar `painel.html` com métricas e estado dos servidores.
+Inicie com:
 
-O projeto deve permanecer em modo simulado: sem negociação automática, saques ou
-transferências reais.
+```bash
+python start.py
+```
+
+Para outro servidor participar da eleição, instale o mesmo projeto, configure um SERVER_ID diferente e execute python start.py. Se um servidor já possuir lease válido, o outro fica em espera. Quando o lease expirar ou for liberado, outro pode assumir.
+
+## 3. Publicar o painel
+
+O arquivo painel.html pode ser hospedado como página estática (por exemplo, GitHub Pages). A configuração web do Firebase no HTML é pública por natureza; a proteção vem da autenticação e das regras RTDB, nunca de esconder a API key do Firebase.
+
+## 4. Limites da IA
+
+- LLM7 é o único provedor de IA configurado.
+- Limite padrão: 8 chamadas por dia UTC e intervalo mínimo de 5 minutos.
+- O agente não chama IA em cada ciclo de cotação; chama quando o usuário pede análise ou quando um lembrete é acionado.
+- Sem LLM7_API_KEY, o restante do agente funciona e o painel informa que a IA não foi configurada.
+
+## 5. Escopo e segurança
+
+Este repositório é um simulador educacional: preços públicos são apenas informativos. Compra, venda e taxa PIX são registros fictícios em uma carteira virtual; nenhuma operação é enviada à Brasil Bitcoin ou a qualquer instituição. Não adicione chaves privadas de corretora. Não use o painel como orientação para decisões financeiras.
+
+## Estrutura
+
+```text
+CryptoIA/
+├── app/
+│   ├── agent.py
+│   ├── firebase_store.py
+│   ├── llm7.py
+│   ├── market.py
+│   ├── memory.py
+│   ├── portfolio.py
+│   └── reminders.py
+├── data/memories/       # criado em runtime; ignorado pelo Git
+├── firebase.rules.json
+├── painel.html
+├── main.py
+├── start.py
+├── requirements.txt
+└── .env.example
+```
