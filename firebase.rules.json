@@ -1,14 +1,10 @@
 {
   "rules": {
     "cryptoia": {
-      ".read": "auth != null",
+      ".read": "auth != null && auth.uid === 'REPLACE_WITH_YOUR_FIREBASE_AUTH_UID'",
       ".write": false,
-      "commands": {
-        "$commandId": { ".write": "auth != null" }
-      },
-      "reminders": {
-        "$reminderId": { ".write": "auth != null" }
-      }
+      "commands": { "$commandId": { ".write": "auth != null && auth.uid === 'REPLACE_WITH_YOUR_FIREBASE_AUTH_UID'" } },
+      "reminders": { "$reminderId": { ".write": "auth != null && auth.uid === 'REPLACE_WITH_YOUR_FIREBASE_AUTH_UID'" } }
     }
   }
 }
