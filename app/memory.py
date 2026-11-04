@@ -22,6 +22,7 @@ def create_memory(title: str, body: str, source: str = "agent") -> str:
     store.set_value(f"memories/{memory_id}", {
         "title": title[:100],
         "file": filename,
+        "body": body[:6000],
         "body_preview": body[:500],
         "source": source,
         "created_at": int(time.time()),
@@ -34,6 +35,11 @@ def read_memory(filename: str | None) -> str:
         return ""
     name = Path(filename).name
     path = MEMORY_DIR / name
-    if not path.is_file():
-        return ""
-    return path.read_text(encoding="utf-8")[:6000]
+    if path.is_file():
+        return path.read_text(encoding="utf-8")[:6000]
+    # Shared Firebase copy allows a standby server to read the note after failover.
+    memories = store.get_value("memories", {}) or {}
+    for entry in memories.values():
+        if isinstance(entry, dict) and entry.get("file") == name:
+            return str(entry.get("body") or entry.get("body_preview") or "")[:6000]
+    return ""
