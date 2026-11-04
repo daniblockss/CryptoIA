@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
-from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 
@@ -16,19 +16,7 @@ from app.reminders import check_reminders
 
 load_dotenv()
 log = logging.getLogger("cryptoia.agent")
-
-
-def _local_analysis(market: dict) -> str:
-    rows = []
-    for symbol, quote in market.items():
-        if symbol == "_meta":
-            continue
-        price = quote.get("price_brl")
-        change = quote.get("change_24h")
-        if price:
-            delta = f"{float(change):+.2f}%" if change is not None else "sem variação informada"
-            rows.append(f"{symbol}: R$ {float(price):,.2f} ({delta} em 24h)")
-    return "Cotações observadas: " + ("; ".join(rows) if rows else "nenhuma cotação disponível") + ". Dados informativos, não previsão."
+ALLOWED_CONDITIONS = {"price_above", "price_below", "change_above", "change_below"}
 
 
 def _handle_ai_requests(market: dict) -> None:
@@ -38,23 +26,71 @@ def _handle_ai_requests(market: dict) -> None:
             continue
         portfolio = store.get_value("portfolio", {}) or {}
         prompt = (
-            "Analise este snapshot de mercado e carteira SIMULADA. "
-            f"Mercado: {market}. Carteira simulada: {portfolio}. "
-            "Destaque incertezas e riscos. Não recomende compra/venda real, "
-            "não prometa lucro e não execute operações."
+            "Analise este snapshot educacional. Mercado: " + json.dumps(market, ensure_ascii=False)[:4500]
+            + ". Carteira simulada: " + json.dumps(portfolio, ensure_ascii=False)[:2500]
+            + ". Retorne APENAS um JSON com este formato: "
+            '{"analysis":"texto","memory_title":"título curto","memory_body":"nota para memória",'
+            '"reminder_suggestions":[{"symbol":"BTC","condition":"price_above","target":123.45,"reason":"motivo"}]}. '
+            "Sugira no máximo duas condições de alerta para observar os dados. "
+            "Os alertas podem ser ativados automaticamente, mas nunca executam ordens. "
+            "Não dê recomendação de compra/venda real, não prometa lucro e destaque incertezas."
         )
-        answer = ask(prompt)
+        raw = ask(
+            prompt,
+            system="Você é o analista educacional do CryptoIA. Carteira e operações são apenas simuladas.",
+            json_mode=True,
+        )
+        try:
+            result = json.loads(raw)
+            if not isinstance(result, dict):
+                raise ValueError("JSON não é objeto")
+        except (json.JSONDecodeError, ValueError):
+            result = {"analysis": raw, "memory_title": "Análise CryptoIA",
+                      "memory_body": raw, "reminder_suggestions": []}
+
+        analysis = str(result.get("analysis") or raw)[:5000]
+        title = str(result.get("memory_title") or "Memória CryptoIA")[:100]
+        body = str(result.get("memory_body") or analysis)[:6000]
+        memory_file = create_memory(title, body, "LLM7")
+
+        suggestions = result.get("reminder_suggestions", [])
+        if isinstance(suggestions, list):
+            for suggestion in suggestions[:2]:
+                if not isinstance(suggestion, dict):
+                    continue
+                symbol = str(suggestion.get("symbol", "")).upper()
+                condition = suggestion.get("condition")
+                quote = market.get(symbol) or {}
+                try:
+                    target = float(suggestion.get("target"))
+                    current = float(quote.get("price_brl") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if symbol not in market or condition not in ALLOWED_CONDITIONS or target <= 0:
+                    continue
+                # Reject implausibly distant model-generated price alerts.
+                if condition.startswith("price_") and (current <= 0 or not current * 0.5 <= target <= current * 2):
+                    continue
+                if condition.startswith("change_") and not -50 <= target <= 50:
+                    continue
+                store.push_value("reminders", {
+                    "symbol": symbol,
+                    "condition": condition,
+                    "target": target,
+                    "reason": str(suggestion.get("reason") or "")[:500],
+                    "memory_file": memory_file,
+                    "status": "active",
+                    "source": "LLM7",
+                    "created_at": int(time.time()),
+                })
+
         store.update_value(f"commands/{command_id}", {
-            "status": "done", "result": answer, "processed_at": int(time.time())
+            "status": "done", "result": analysis, "memory_file": memory_file,
+            "processed_at": int(time.time())
         })
         store.push_value("events", {
-            "type": "ai_analysis", "message": answer[:5000], "at": int(time.time())
+            "type": "ai_analysis", "message": analysis, "at": int(time.time())
         })
-        try:
-            create_memory("Análise de mercado " + datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
-                          answer, "LLM7")
-        except Exception:
-            log.exception("Não foi possível salvar memória da análise.")
 
 
 def run() -> None:
