@@ -136,9 +136,11 @@ def fetch_market(symbols: list[str]) -> dict[str, dict[str, Any]]:
     except Exception as exc:
         errors.append(f"Brasil Bitcoin: {type(exc).__name__}: {exc}")
 
-    missing = [s for s in symbols if s.upper() not in market]
     try:
-        market.update(coinmarketcap_quotes(missing or symbols))
+        cmc_quotes = coinmarketcap_quotes(symbols)
+        # Keep Brasil Bitcoin as the preferred quote when available; use CMC as fallback.
+        for symbol, quote in cmc_quotes.items():
+            market.setdefault(symbol, quote)
     except Exception as exc:
         errors.append(f"CoinMarketCap: {type(exc).__name__}: {exc}")
 
