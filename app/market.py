@@ -34,6 +34,13 @@ def _number(value: Any) -> float | None:
         return None
 
 
+def _change(value: Any) -> float | None:
+    try:
+        return float(str(value).replace(",", "."))
+    except (TypeError, ValueError):
+        return None
+
+
 def brasil_bitcoin_tickers() -> dict[str, dict[str, Any]]:
     response = SESSION.get(f"{BB_BASE}/ticker24h", timeout=15)
     response.raise_for_status()
@@ -54,7 +61,7 @@ def brasil_bitcoin_tickers() -> dict[str, dict[str, Any]]:
         found[symbol] = {
             "symbol": symbol,
             "price_brl": price,
-            "change_24h": _number(row.get("priceChangePercent") or row.get("changePercent") or row.get("change_24h")),
+            "change_24h": _change(row.get("priceChangePercent") if row.get("priceChangePercent") is not None else row.get("changePercent") if row.get("changePercent") is not None else row.get("change_24h")),
             "source": "Brasil Bitcoin",
             "updated_at": int(time.time()),
         }
@@ -98,7 +105,7 @@ def coinmarketcap_quotes(symbols: list[str]) -> dict[str, dict[str, Any]]:
         quote = coin.get("quote", {})
         brl = quote.get("BRL", {}) if isinstance(quote, dict) else {}
         price = _number(brl.get("price")) if isinstance(brl, dict) else None
-        change = _number(brl.get("percent_change_24h")) if isinstance(brl, dict) else None
+        change = _change(brl.get("percent_change_24h")) if isinstance(brl, dict) else None
 
         # Keyless simple-price response variants
         if not price:
