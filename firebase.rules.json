@@ -1,0 +1,14 @@
+{
+  "rules": {
+    "cryptoia": {
+      ".read": "auth != null",
+      ".write": false,
+      "commands": {
+        "$commandId": { ".write": "auth != null" }
+      },
+      "reminders": {
+        "$reminderId": { ".write": "auth != null" }
+      }
+    }
+  }
+}
