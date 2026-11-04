@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CryptoIA — Painel</title>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+:root{color-scheme:dark;--bg:#0b1020;--panel:#121a2d;--muted:#91a0bb;--line:#26324a;--text:#eef3ff;--accent:#8b9cff;--good:#43d6a0;--bad:#ff7185}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top,#182442,var(--bg) 55%);color:var(--text);font:15px system-ui,Segoe UI,sans-serif}main{max-width:1250px;margin:auto;padding:24px}
+.top{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}h1{margin:0;font-size:28px}h2{font-size:17px;margin:0 0 14px}.muted,small{color:var(--muted)}.tag{border:1px solid var(--line);border-radius:999px;padding:6px 10px;color:#b9c6ff;font-size:12px}
+.panel{background:linear-gradient(145deg,#151f35,#10182a);border:1px solid var(--line);border-radius:16px;padding:18px;min-width:0}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin:18px 0}.wide{display:grid;grid-template-columns:1.3fr 1fr;gap:14px;margin:14px 0}
+.value{font-size:25px;font-weight:700;margin-top:6px;overflow-wrap:anywhere}.positive{color:var(--good)}.negative{color:var(--bad)}
+input,select,button{font:inherit;border-radius:10px;padding:10px 12px;border:1px solid var(--line);background:#0b1325;color:var(--text);width:100%}button{background:#5369dc;border:0;font-weight:650;cursor:pointer}button.secondary{background:#263451}button.danger{background:#85384b}
+form{display:grid;gap:9px;margin:12px 0}label{font-size:12px;color:var(--muted)}.formrow{display:grid;grid-template-columns:1fr 1fr;gap:9px}table{width:100%;border-collapse:collapse;font-size:13px}td,th{text-align:left;padding:10px 7px;border-bottom:1px solid var(--line)}th{color:var(--muted);font-weight:500}
+.scroll{overflow:auto;max-height:320px}.item{padding:10px 0;border-bottom:1px solid var(--line)}.item:last-child{border:0}#login{max-width:420px;margin:10vh auto}.hidden{display:none!important}.status{font-size:13px;margin-top:10px;color:var(--muted)}
+@media(max-width:850px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.wide{grid-template-columns:1fr}}@media(max-width:480px){main{padding:14px}.grid{grid-template-columns:1fr 1fr}.value{font-size:20px}}
+</style></head><body><main>
+<section id="login" class="panel"><h1>CryptoIA</h1><p class="muted">Entre com uma conta autorizada do Firebase para abrir o painel.</p>
+<form id="loginForm"><label>E-mail</label><input id="email" type="email" autocomplete="username" required><label>Senha</label><input id="password" type="password" autocomplete="current-password" required><button type="submit">Entrar</button><button type="button" class="secondary" id="register">Criar conta</button><div id="loginMsg" class="status"></div></form></section>
+<section id="app" class="hidden">
+<div class="top"><div><h1>CryptoIA</h1><div class="muted">Monitoramento de mercado e carteira virtual</div></div><div><span class="tag">MODO SIMULADO · SOMENTE LEITURA DO MERCADO</span> <button id="logout" class="secondary" style="width:auto;margin-left:8px">Sair</button></div></div>
+<div class="grid">
+<div class="panel"><div class="muted">Patrimônio simulado</div><div class="value" id="total">R$ 0,00</div><small id="pnl">Resultado: R$ 0,00</small></div>
+<div class="panel"><div class="muted">Saldo virtual</div><div class="value" id="cash">R$ 0,00</div><small>Dinheiro fictício disponível</small></div>
+<div class="panel"><div class="muted">Valor das posições</div><div class="value" id="positionsValue">R$ 0,00</div><small id="unrealized">Resultado não realizado: R$ 0,00</small></div>
+<div class="panel"><div class="muted">Servidor</div><div class="value" id="serverState">—</div><small id="serverInfo">Aguardando estado</small></div></div>
+<div class="wide">
+<div class="panel"><h2>Mercado</h2><div class="scroll"><table><thead><tr><th>Ativo</th><th>Preço BRL</th><th>24h</th><th>Fonte</th></tr></thead><tbody id="marketRows"><tr><td colspan="4">Aguardando dados…</td></tr></tbody></table></div><div class="status" id="marketUpdated"></div></div>
+<div class="panel"><h2>Patrimônio ao longo do tempo</h2><canvas id="chart" height="160"></canvas><div class="status">O gráfico registra os valores recebidos enquanto este painel está aberto.</div></div></div>
+<div class="wide">
+<div class="panel"><h2>Operações da carteira simulada</h2>
+<form id="tradeForm"><div class="formrow"><div><label>Tipo</label><select id="tradeType"><option value="buy">Compra virtual</option><option value="sell">Venda virtual</option></select></div><div><label>Ativo</label><select id="tradeSymbol"><option>BTC</option><option>ETH</option><option>SOL</option></select></div></div>
+<div><label>Valor em R$ (compra) ou quantidade (venda)</label><input id="tradeAmount" type="number" min="0.00000001" step="any" required placeholder="Ex.: 5,00"></div><button type="submit">Registrar operação simulada</button></form>
+<form id="expenseForm"><label>Despesa fictícia (ex.: taxa PIX simulada de R$ 2,99)</label><div class="formrow"><input id="expenseAmount" type="number" min="0.01" step="0.01" value="2.99" required><input id="expenseLabel" value="Taxa PIX (simulada)" maxlength="80"></div><button class="secondary" type="submit">Registrar despesa virtual</button></form>
+<form id="analysisForm"><button class="secondary" type="submit">Pedir análise ao LLM7</button></form><div class="status">Nenhum botão envia ordens a corretoras ou movimenta dinheiro real.</div></div>
+<div class="panel"><h2>Posições virtuais</h2><div class="scroll"><table><thead><tr><th>Ativo</th><th>Quantidade</th><th>Valor atual</th><th>Custo</th></tr></thead><tbody id="positionRows"><tr><td colspan="4">Sem posições</td></tr></tbody></table></div></div></div>
+<div class="wide">
+<div class="panel"><h2>Criar lembrete de mercado</h2><form id="reminderForm"><div class="formrow"><div><label>Ativo</label><select id="reminderSymbol"><option>BTC</option><option>ETH</option><option>SOL</option></select></div><div><label>Condição</label><select id="condition"><option value="price_above">Preço acima de (R$)</option><option value="price_below">Preço abaixo de (R$)</option><option value="change_above">Variação 24h acima de (%)</option><option value="change_below">Variação 24h abaixo de (%)</option></select></div></div>
+<label>Valor de referência</label><input id="target" type="number" step="any" required placeholder="Ex.: 350000"><label>Arquivo de memória relacionado (opcional)</label><input id="memoryFile" maxlength="100" placeholder="ex.: contexto-btc.md"><button type="submit">Salvar lembrete</button></form><div id="reminders" class="scroll"></div></div>
+<div class="panel"><h2>Memórias e análises</h2><div id="memories" class="scroll">Nenhuma memória ainda.</div><h2 style="margin-top:18px">Eventos</h2><div id="events" class="scroll">Nenhum evento ainda.</div></div></div>
+<div class="panel"><h2>Histórico da carteira simulada</h2><div class="scroll"><table><thead><tr><th>Data</th><th>Tipo</th><th>Detalhe</th><th>Valor</th></tr></thead><tbody id="history"><tr><td colspan="4">Sem movimentações</td></tr></tbody></table></div></div><div class="status" id="lastUpdate"></div>
+</section></main>
+<script>
+const firebaseConfig={apiKey:"AIzaSyBQ4tDXbdmJRGc-4Ih6fWyCDEUPkG13oE0",authDomain:"cryptoai-160f4.firebaseapp.com",databaseURL:"https://cryptoai-160f4-default-rtdb.firebaseio.com",projectId:"cryptoai-160f4",storageBucket:"cryptoai-160f4.firebasestorage.app",messagingSenderId:"837962183076",appId:"1:837962183076:web:aa508277a9d0c2daca9131",measurementId:"G-WKS0WNX0W9"};
+firebase.initializeApp(firebaseConfig);const auth=firebase.auth(),db=firebase.database();const $=id=>document.getElementById(id);
+const brl=n=>new Intl.NumberFormat("pt-BR",{style:"currency",currency:"BRL"}).format(Number(n||0));
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let chart;const historyPoints=[];
+function listen(path,cb){db.ref("cryptoia/"+path).on("value",s=>cb(s.val()));}
+$("loginForm").addEventListener("submit",async e=>{e.preventDefault();$("loginMsg").textContent="Entrando…";try{await auth.signInWithEmailAndPassword($("email").value,$("password").value)}catch(err){$("loginMsg").textContent=err.message}});
+$("register").onclick=async()=>{try{await auth.createUserWithEmailAndPassword($("email").value,$("password").value);$("loginMsg").textContent="Conta criada."}catch(err){$("loginMsg").textContent=err.message}};
+$("logout").onclick=()=>auth.signOut();auth.onAuthStateChanged(user=>{$("login").classList.toggle("hidden",!!user);$("app").classList.toggle("hidden",!user);if(user)startDashboard()});
+function startDashboard(){
+listen("market",m=>{m=m||{};window.latestMarket=m;const rows=Object.values(m).filter(x=>x&&x.symbol);$("marketRows").innerHTML=rows.map(x=>"<tr><td><b>"+esc(x.symbol)+"</b></td><td>"+brl(x.price_brl)+"</td><td>"+(x.change_24h==null?"—":Number(x.change_24h).toFixed(2)+"%")+"</td><td>"+esc(x.source||"—")+"</td></tr>").join("")||'<tr><td colspan="4">Sem dados. Verifique as conexões de mercado.</td></tr>';$("marketUpdated").textContent=m.updated_at?"Atualizado: "+new Date(m.updated_at*1000).toLocaleString("pt-BR"):"";});
+listen("portfolio",p=>{if(!p)return;$("total").textContent=brl(p.total_value_brl);$("cash").textContent=brl(p.cash_brl);$("positionsValue").textContent=brl(p.market_value_brl);$("pnl").textContent="Resultado total: "+brl(p.total_pnl_brl);$("pnl").className=Number(p.total_pnl_brl)>=0?"positive":"negative";$("unrealized").textContent="Resultado não realizado: "+brl(p.unrealized_pnl_brl);
+const positions=p.positions||{};$("positionRows").innerHTML=Object.entries(positions).filter(([s,v])=>Number(v.quantity)>0).map(([s,v])=>"<tr><td>"+esc(s)+"</td><td>"+Number(v.quantity).toFixed(8)+"</td><td>"+brl(Number(v.quantity)*(Number((window.latestMarket||{})[s]?.price_brl)||0))+"</td><td>"+brl(v.cost_brl)+"</td></tr>").join("")||'<tr><td colspan="4">Sem posições</td></tr>';
+historyPoints.push({x:new Date(),y:Number(p.total_value_brl||0)});if(historyPoints.length>80)historyPoints.shift();drawChart();const tx=(p.transactions||[]).slice().reverse();$("history").innerHTML=tx.map(t=>"<tr><td>"+new Date(t.at*1000).toLocaleString("pt-BR")+"</td><td>"+esc(t.type)+"</td><td>"+esc(t.symbol||t.label||"—")+"</td><td>"+brl(t.value_brl)+"</td></tr>").join("")||'<tr><td colspan="4">Sem movimentações</td></tr>';});
+listen("servers/active",s=>{$("serverState").textContent=s?.state||"offline";$("serverInfo").textContent=s?esc(s.server_id)+" · geração "+s.generation+" · "+new Date(s.updated_at*1000).toLocaleTimeString("pt-BR"):"Sem heartbeat"});
+listen("reminders",r=>{$("reminders").innerHTML=Object.entries(r||{}).reverse().map(([id,x])=>'<div class="item"><b>'+esc(x.symbol)+" — "+esc(x.condition)+'</b><div class="muted">Alvo: '+esc(x.target)+" · "+esc(x.status||"active")+"</div>"+(x.analysis?"<p>"+esc(x.analysis)+"</p>":"")+(x.status==="active"?'<button class="danger" style="margin-top:6px" onclick="disableReminder(\''+esc(id)+'\')">Desativar</button>':"")+"</div>").join("")||"Nenhum lembrete."});
+listen("memories",m=>{$("memories").innerHTML=Object.values(m||{}).reverse().map(x=>'<div class="item"><b>'+esc(x.title)+'</b><div class="muted">'+esc(x.file)+" · "+new Date(x.created_at*1000).toLocaleString("pt-BR")+"</div><p>"+esc(x.body_preview||"")+"</p></div>").join("")||"Nenhuma memória ainda."});
+listen("events",ev=>{$("events").innerHTML=Object.values(ev||{}).reverse().slice(0,20).map(x=>'<div class="item"><b>'+esc(x.type||"Evento")+'</b><div class="muted">'+new Date(x.at*1000).toLocaleString("pt-BR")+"</div><div>"+esc(x.message||x.analysis||"")+"</div></div>").join("")||"Nenhum evento."});
+$("lastUpdate").textContent="Conectado ao Firebase como "+auth.currentUser.email;
+}
+function drawChart(){if(!window.Chart)return;if(!chart){chart=new Chart($("chart"),{type:"line",data:{datasets:[{label:"Patrimônio simulado (R$)",data:historyPoints,borderColor:"#8b9cff",backgroundColor:"rgba(139,156,255,.12)",fill:true,tension:.25}]},options:{animation:false,plugins:{legend:{labels:{color:"#eef3ff"}}},scales:{x:{type:"category",ticks:{color:"#91a0bb"}},y:{ticks:{color:"#91a0bb"}}}}});}else chart.update("none");}
+async function addCommand(data){await db.ref("cryptoia/commands").push({...data,status:"pending",created_at:Math.floor(Date.now()/1000),created_by:auth.currentUser.uid});}
+$("tradeForm").onsubmit=async e=>{e.preventDefault();try{const type=$("tradeType").value;const data={type,symbol:$("tradeSymbol").value};data[type==="buy"?"brl_amount":"quantity"]=Number($("tradeAmount").value);await addCommand(data);$("tradeAmount").value="";alert("Solicitação de operação SIMULADA enviada ao agente.");}catch(err){alert(err.message)}};
+$("expenseForm").onsubmit=async e=>{e.preventDefault();try{await addCommand({type:"simulated_expense",amount_brl:Number($("expenseAmount").value),label:$("expenseLabel").value});alert("Despesa fictícia enviada ao agente.");}catch(err){alert(err.message)}};
+$("analysisForm").onsubmit=async e=>{e.preventDefault();try{await addCommand({type:"ask_ai"});alert("Análise solicitada. O limite diário do LLM7 será respeitado.");}catch(err){alert(err.message)}};
+$("reminderForm").onsubmit=async e=>{e.preventDefault();try{await db.ref("cryptoia/reminders").push({symbol:$("reminderSymbol").value,condition:$("condition").value,target:Number($("target").value),memory_file:$("memoryFile").value.trim(),status:"active",created_at:Math.floor(Date.now()/1000),created_by:auth.currentUser.uid});$("target").value="";alert("Lembrete salvo.");}catch(err){alert(err.message)}};
+window.disableReminder=async id=>{try{await db.ref("cryptoia/reminders/"+id).update({status:"disabled"});}catch(err){alert(err.message)}};
+</script></body></html>
