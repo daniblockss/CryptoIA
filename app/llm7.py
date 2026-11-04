@@ -13,6 +13,7 @@ MODEL = os.getenv("LLM7_MODEL", "DeepSeek-V4.1-Flash")
 MAX_CALLS = max(0, int(os.getenv("LLM7_MAX_CALLS_PER_DAY", "8")))
 MIN_INTERVAL = max(60, int(os.getenv("LLM7_MIN_INTERVAL_SECONDS", "300")))
 MAX_TOKENS = min(1200, max(100, int(os.getenv("LLM7_MAX_TOKENS", "700"))))
+MAX_DAILY_TOKENS = max(1000, int(os.getenv("LLM7_MAX_TOKENS_PER_DAY", "12000")))
 
 
 def _quota_path() -> str:
@@ -32,10 +33,14 @@ def ask(
     quota = store.get_value(quota_path, {}) or {}
     calls = int(quota.get("calls", 0))
     last_call = int(quota.get("last_call_at", 0))
+    used_tokens = int(quota.get("total_tokens", 0))
+    estimated_input = max(1, (len(prompt) + len(system)) // 4)
     now = int(time.time())
 
     if calls >= MAX_CALLS:
         return f"Limite diário do LLM7 atingido ({MAX_CALLS} chamadas)."
+    if used_tokens + estimated_input + MAX_TOKENS > MAX_DAILY_TOKENS:
+        return f"Limite diário estimado de tokens atingido ({MAX_DAILY_TOKENS})."
     if now - last_call < MIN_INTERVAL:
         return f"Limite de intervalo ativo. Aguarde {MIN_INTERVAL - (now-last_call)} segundos."
 
@@ -68,4 +73,16 @@ def ask(
     content = choices[0].get("message", {}).get("content")
     if isinstance(content, list):
         content = " ".join(str(item.get("text", "")) for item in content if isinstance(item, dict))
-    return str(content or "LLM7 retornou conteúdo vazio.")[:12000]
+    content = str(content or "LLM7 retornou conteúdo vazio.")[:12000]
+
+    usage = data.get("usage") or {}
+    prompt_tokens = int(usage.get("prompt_tokens") or estimated_input)
+    completion_tokens = int(usage.get("completion_tokens") or max(1, len(content) // 4))
+    total_tokens = int(usage.get("total_tokens") or prompt_tokens + completion_tokens)
+    store.update_value(quota_path, {
+        "prompt_tokens": int(quota.get("prompt_tokens", 0)) + prompt_tokens,
+        "completion_tokens": int(quota.get("completion_tokens", 0)) + completion_tokens,
+        "total_tokens": used_tokens + total_tokens,
+        "model": MODEL,
+    })
+    return content
